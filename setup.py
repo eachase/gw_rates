@@ -70,6 +70,11 @@ install_requires = [
     'jupyter',
     'emcee',
     'corner',
+    'gwpy',
+    'sqlalchemy',
+    'psycopg2-binary',
+    'pandas',
+    'h5py',
 ]
 
 tests_require = [
