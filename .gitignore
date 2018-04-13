@@ -4,10 +4,10 @@
 *.ipynb_checkpoints
 
 # build products
-/gravityspy/version.py
+/gwrates/version.py
 /build/
 /dist/
-/gravityspy.egg-info
+/gwrates.egg-info
 /.eggs/
 
 # documentation products
