@@ -166,10 +166,12 @@ class ManyBackgroundCollection(object):
             `samples` that contains keys of 'Foreground', 'Gaussian'
             and list of glitch_classes. In addition, the attrs
             `foreground_count`, `gaussian_background_count`, and
-            `glitch_class_count` are set.
+            `num_samples` are set.
 
         Notes
-        -----"""
+        -----
+        """
+        
         glitch_classes = kwargs.pop('glitch_classes', self.glitch_dict.keys())
         self.samples = {}
 
@@ -191,24 +193,25 @@ class ManyBackgroundCollection(object):
         for glitch_class in glitch_classes: 
             self.samples[glitch_class] = self.glitch_dict[glitch_class]
 
-        self.glitch_class_count = sum([len(x) for x in self.samples.values()])
+        self.num_samples = sum([len(x) for x in self.samples.values()])
 
 
     def plot_hist(self):
         """
         Make a histogram of all drawn samples.
         """
-        num_samples = self.foreground_count + self.gaussian_background_count + \
-            self.glitch_class_count
         num_classes = len(self.samples.keys())
-        num_bins = int(np.floor(np.sqrt(num_samples)))
+        num_bins = int(np.floor(np.sqrt(self.num_samples)))
         colors = plt.cm.viridis(np.linspace(0, 1, num_classes))
+        
+        # FIXME: need a robust and uniform way to define bins
+        bins = np.linspace(self.xmin, 100, num_bins)        
 
         plt.figure(figsize=(20,10))
 
         for idx, icategory in enumerate(self.samples.keys()):
             plt.hist(self.samples[icategory], label=icategory,
-                     color=colors[idx], bins=num_bins, cumulative=-1,
+                     color=colors[idx], bins=bins, cumulative=-1,
                      histtype='step')
 
         plt.legend(loc='upper right')
@@ -217,7 +220,7 @@ class ManyBackgroundCollection(object):
         plt.ylim(1, None)
         plt.xlabel('SNR')
         plt.ylabel('Number of Events  with SNR > Corresponding SNR')
-        plt.title('%i Samples with Minimum SNR of %.2f' % (int(num_samples), self.xmin))
+        plt.title('%i Samples with Minimum SNR of %.2f' % (int(self.num_samples), self.xmin))
         plt.show()
 
 
