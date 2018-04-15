@@ -116,79 +116,101 @@ class ManyBackgroundCollection(object):
     Events are divided into foreground and several different
     classes of background events.
     """
-    def __init__(self, r_fg, r_gaussian, glitch_dict, xmin=3.5):
+    def __init__(self, glitch_dict, xmin=3.5):
         """
         Initialize the sample collector
 
         Parameters:
         -----------
-        r_fg: float
-            known rate of foreground events
-
-        r_gaussian: float
-            known rate of gaussian noise background events
-
-        glitch_dict: dictionary
+        glitch_dict: `dict`
             dictionary with glitch class as key (i.e. 'Scratchy')
             and corresponding snr time-series as value
 
-        xmin: float
+        xmin: `float`, optional, default: 3.5
             Minimum threshold SNR
-        """
+
+        Returns
+        -------
+        `ManyBackgroundCollection`: with the following
+        attrs, `xmin`, `glitch_dict`
+
+        Notes
+        -----"""
 
         self.xmin = xmin
         self.glitch_dict = glitch_dict
-        self.r_fg = r_fg
-        self.r_gaussian = r_gaussian
-
-        # Set up dictionary for different classes of events
-        self.samples = {k: [] for k in ['Foreground', 'Gaussian'] + \
-            list(glitch_dict.keys())}
 
 
-    def draw_samples(self):
+    def draw_samples(self, foreground_count, gaussian_background_count,
+                     **kwargs):
         """
-        Draw either a full set of foreground and background events
-        """
+        Draw a full set of foreground, background, and Gravity Spy
+        events
+
+        Parameters:
+        -----------
+        foreground_count : `int`
+            known count of foreground events
+
+        gaussian_background_count : `int`
+            known count of background events
+
+        glitch_classes : `list`, optional, default: `self.glitch_dict.keys()`
+            if you would like
+            to only populate samples from some of the gravityspy
+            categories provide a list like `['Scratchy', 'Blip']` 
+
+        Returns
+        -------
+        self : `ManyBackgroundCollection` now has an attr
+            `samples` that contains keys of 'Foreground', 'Gaussian'
+            and list of glitch_classes. In addition, the attrs
+            `foreground_count`, `gaussian_background_count`, and
+            `glitch_class_count` are set.
+
+        Notes
+        -----"""
+        glitch_classes = kwargs.pop('glitch_classes', self.glitch_dict.keys())
+        self.samples = {}
+
         # Draw foreground samples
-        for i in np.arange(self.r_fg):
-            self.samples['Foreground'].append(self.xmin * (1 - np.random.uniform())**(-1/3))
+        self.foreground_count = foreground_count
+        self.samples['Foreground'] = self.xmin * (1 -
+                                         np.random.uniform(size=foreground_count))**(-1/3)
+
+        
 
         # Draw gaussian background samples
-        for i in np.arange(self.r_gaussian):
-            self.samples['Gaussian'].append(np.sqrt(2) * \
-                erfinv(1 - (1 - np.random.uniform()) * erfc(self.xmin / np.sqrt(2))))
+        self.gaussian_background_count = gaussian_background_count
+        self.samples['Gaussian'] = np.sqrt(2) * erfinv(1 -
+                                       (1 - np.random.uniform(
+                                       size=gaussian_background_count))*
+                                       erfc(self.xmin / np.sqrt(2)))
 
-        # Define each glitch class to have SNRs defined in the glitch_dict    
-        for glitch_class in self.glitch_dict.keys():
+        # Define each glitch class to have SNRs defined in the glitch_dict
+        for glitch_class in glitch_classes: 
             self.samples[glitch_class] = self.glitch_dict[glitch_class]
+
+        self.glitch_class_count = sum([len(x) for x in self.samples.values()])
 
 
     def plot_hist(self):
         """
         Make a histogram of all drawn samples.
         """
-        num_samples = num_samples = self.r_fg + self.r_gaussian + \
-             np.sum([r[0] for r in self.glitch_dict.values()])
-        num_classes = 2 + len(self.glitch_dict.keys())
+        num_samples = self.foreground_count + self.gaussian_background_count + \
+            self.glitch_class_count
+        num_classes = len(self.samples.keys())
         num_bins = int(np.floor(np.sqrt(num_samples)))
         colors = plt.cm.viridis(np.linspace(0, 1, num_classes))
 
         plt.figure(figsize=(20,10))
 
-        # Foreground histogram
-        bin_counts, bins, _ = plt.hist(self.samples['Foreground'], label='Foreground', color=colors[0], bins=num_bins, cumulative=-1, histtype='step')
+        for idx, icategory in enumerate(self.samples.keys()):
+            plt.hist(self.samples[icategory], label=icategory,
+                     color=colors[idx], bins=num_bins, cumulative=-1,
+                     histtype='step')
 
-        # FIXME: Set bins on highest-SNR event, not just the foreground
-        
-        # Background histogram
-        plt.hist(self.samples['Gaussian'], label='Gaussian', bins=bins, cumulative=-1, histtype='step', color=colors[1])
-
-        # Other glitch class histograms
-        for i, glitch_class in enumerate(self.glitch_dict):
-            plt.hist(self.samples[glitch_class], label=glitch_class, color=colors[i+2], 
-                    bins=bins, cumulative=-1, histtype='step')
-        
         plt.legend(loc='upper right')
         plt.yscale('log', nonposy='clip')
         plt.xlim(0, None)
