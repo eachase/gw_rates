@@ -165,8 +165,8 @@ class ManyBackgroundCollection(object):
         self : `ManyBackgroundCollection` now has an attr
             `samples` that contains keys of 'Foreground', 'Gaussian'
             and list of glitch_classes. In addition, the attrs
-            `foreground_count`, `gaussian_background_count`, and
-            `num_samples` are set.
+            `foreground_count`, `gaussian_background_count`,
+            `unlabeled_samples` and `num_samples` are set.
 
         Notes
         -----
@@ -193,7 +193,13 @@ class ManyBackgroundCollection(object):
         for glitch_class in glitch_classes: 
             self.samples[glitch_class] = self.glitch_dict[glitch_class]
 
-        self.num_samples = sum([len(x) for x in self.samples.values()])
+        self.unlabeled_samples = np.array([])
+        for key in self.samples.keys():
+            self.unlabeled_samples = np.append(self.unlabeled_samples, 
+                np.array(self.samples[key]))
+
+        self.num_samples = len(self.unlabeled_samples)
+
 
 
     def plot_hist(self):
@@ -222,6 +228,64 @@ class ManyBackgroundCollection(object):
         plt.ylabel('Number of Events  with SNR > Corresponding SNR')
         plt.title('%i Samples with Minimum SNR of %.2f' % (int(self.num_samples), self.xmin))
         plt.show()
+    
+
+    def lnlike(self, counts):
+        """
+        Log Likelihood
+
+        Parameters:
+        -----------
+        counts: array
+            each entry is a count for each source type in the following order:
+            [foreground_counts, gaussian_counts, all_other_glitch_counts]
+        """
+        if np.all(counts >= 0):
+            fg_likelihood = 3 * self.xmin**3 * self.unlabeled_samples**(-4) * \
+                 counts[0] 
+            gauss_likelihood = (np.sqrt(np.pi/2) * erfc(
+                self.xmin / np.sqrt(2)))**(-1) * np.exp(
+                -self.unlabeled_samples**2 / 2) * counts[1]
+            return np.sum(np.log(fg_likelihood + gauss_likelihood))
+        else:
+            return -np.inf
+
+
+    def lnprior(self, counts):
+        """
+        Log Prior
+
+        Parameters:
+        -----------
+        counts: array
+            each entry is a count for each source type in the following order:
+            [foreground_counts, gaussian_counts, all_other_glitch_counts]
+            
+        N.B.: technically, the exp^(-Sum(counts)) term is part of the likelihood in FGMC
+        """
+        if np.all(counts >= 0):
+            return -np.sum(counts) - 0.5*np.log(np.prod(counts))
+        else:
+            return -np.inf
+
+
+    def lnprob(self, counts):
+        """
+        Combine log likelihood and log prior
+
+        Parameters:
+        -----------
+        counts: array
+            each entry is a count for each source type in the following order:
+            [foreground_counts, gaussian_counts, all_other_glitch_counts]
+         """
+
+        prior = self.lnprior(counts)
+        posterior = self.lnlike(counts)
+        if not np.isfinite(prior):
+            return -np.inf
+        return prior + posterior
+
 
 
 def lnlike(theta, samples, xmin):
