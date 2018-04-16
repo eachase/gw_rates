@@ -75,6 +75,7 @@ install_requires = [
     'psycopg2-binary',
     'pandas',
     'h5py',
+    'scikit-learn',
 ]
 
 tests_require = [
