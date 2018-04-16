@@ -3,6 +3,7 @@ from matplotlib import use
 use('agg')
 import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.neighbors import KernelDensity
 from scipy.special import erf, erfc, erfinv
 
 __all__ = ['SampleCollection', 'ManyBackgroundCollection',
@@ -193,6 +194,7 @@ class ManyBackgroundCollection(object):
         for glitch_class in glitch_classes: 
             self.samples[glitch_class] = self.glitch_dict[glitch_class]
 
+        # Create array of all samples, regardless of label
         self.unlabeled_samples = np.array([])
         for key in self.samples.keys():
             self.unlabeled_samples = np.append(self.unlabeled_samples, 
@@ -230,7 +232,7 @@ class ManyBackgroundCollection(object):
         plt.show()
     
 
-    def lnlike(self, counts):
+    def lnlike(self, counts, glitch_classes=[], glitch_kdes={}):
         """
         Log Likelihood
 
@@ -241,12 +243,32 @@ class ManyBackgroundCollection(object):
             [foreground_counts, gaussian_counts, all_other_glitch_counts]
         """
         if np.all(counts >= 0):
+            # Foreground likelihood
             fg_likelihood = 3 * self.xmin**3 * self.unlabeled_samples**(-4) * \
                  counts[0] 
+
+            # Gaussian noise likelihood
             gauss_likelihood = (np.sqrt(np.pi/2) * erfc(
                 self.xmin / np.sqrt(2)))**(-1) * np.exp(
                 -self.unlabeled_samples**2 / 2) * counts[1]
-            return np.sum(np.log(fg_likelihood + gauss_likelihood))
+
+            # Likelihood for all other glitch sources of interest
+            glitch_likelihood = 0
+            for i, glitch_type in enumerate(glitch_classes):
+                # FIXME: compute KDE elsewhere
+ 
+                # Define KDE for glitch SNR data
+                #kde = KernelDensity()
+                #glitch_snrs = np.asarray(self.glitch_dict[glitch_type]).reshape(-1, 1)
+                #kde.fit(glitch_snrsa)
+                kde = glitch_kdes[glitch_type]
+
+                # Evaluate likelihood
+                glitch_likelihood += counts[i+2] * np.exp(
+                    kde.score_samples(self.unlabeled_samples.reshape(-1, 1)))
+
+            return np.sum(np.log(fg_likelihood + gauss_likelihood + \
+                glitch_likelihood))
         else:
             return -np.inf
 
@@ -269,7 +291,7 @@ class ManyBackgroundCollection(object):
             return -np.inf
 
 
-    def lnprob(self, counts):
+    def lnprob(self, counts, glitch_classes=[], glitch_kdes={}):
         """
         Combine log likelihood and log prior
 
@@ -281,7 +303,7 @@ class ManyBackgroundCollection(object):
          """
 
         prior = self.lnprior(counts)
-        posterior = self.lnlike(counts)
+        posterior = self.lnlike(counts, glitch_classes, glitch_kdes)
         if not np.isfinite(prior):
             return -np.inf
         return prior + posterior
