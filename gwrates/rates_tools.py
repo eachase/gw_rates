@@ -232,7 +232,7 @@ class ManyBackgroundCollection(object):
         plt.show()
     
 
-    def lnlike(self, counts, glitch_classes=[], glitch_kdes={}):
+    def lnlike(self, counts, glitch_classes=[], glitch_kdes={}, snrgrid = None):
         """
         Log Likelihood
 
@@ -255,17 +255,15 @@ class ManyBackgroundCollection(object):
             # Likelihood for all other glitch sources of interest
             glitch_likelihood = 0
             for i, glitch_type in enumerate(glitch_classes):
-                # FIXME: compute KDE elsewhere
- 
-                # Define KDE for glitch SNR data
-                #kde = KernelDensity()
-                #glitch_snrs = np.asarray(self.glitch_dict[glitch_type]).reshape(-1, 1)
-                #kde.fit(glitch_snrsa)
-                kde = glitch_kdes[glitch_type]
+                kde_likelihoods = glitch_kdes[glitch_type]
+                likelihoods = np.zeros(self.unlabeled_samples.shape)
+                samp_snr_grid = np.around(self.unlabeled_samples, decimals=2)
+                idxinsidekde = np.argwhere((samp_snr_grid > 7.5) & (samp_snr_grid<100.0))
+                for idx in idxinsidekde:
+                    likelihoods[idx] = kde_likelihoods[samp_snr_grid[idx] == snrgrid][0]
 
                 # Evaluate likelihood
-                glitch_likelihood += counts[i+2] * np.exp(
-                    kde.score_samples(self.unlabeled_samples.reshape(-1, 1)))
+                glitch_likelihood += counts[i+2] * likelihoods
 
             return np.sum(np.log(fg_likelihood + gauss_likelihood + \
                 glitch_likelihood))
@@ -291,7 +289,7 @@ class ManyBackgroundCollection(object):
             return -np.inf
 
 
-    def lnprob(self, counts, glitch_classes=[], glitch_kdes={}):
+    def lnprob(self, counts, glitch_classes=[], glitch_kdes={}, snrgrid=None):
         """
         Combine log likelihood and log prior
 
@@ -303,7 +301,7 @@ class ManyBackgroundCollection(object):
          """
 
         prior = self.lnprior(counts)
-        posterior = self.lnlike(counts, glitch_classes, glitch_kdes)
+        posterior = self.lnlike(counts, glitch_classes, glitch_kdes, snrgrid)
         if not np.isfinite(prior):
             return -np.inf
         return prior + posterior
