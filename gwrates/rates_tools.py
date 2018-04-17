@@ -203,7 +203,6 @@ class ManyBackgroundCollection(object):
         self.num_samples = len(self.unlabeled_samples)
 
 
-
     def plot_hist(self):
         """
         Make a histogram of all drawn samples.
@@ -232,7 +231,7 @@ class ManyBackgroundCollection(object):
         plt.show()
     
 
-    def lnlike(self, counts, glitch_classes=[], glitch_kdes={}, snrgrid = None):
+    def lnlike(self, counts, glitch_classes=[]):
         """
         Log Likelihood
 
@@ -244,26 +243,17 @@ class ManyBackgroundCollection(object):
         """
         if np.all(counts >= 0):
             # Foreground likelihood
-            fg_likelihood = 3 * self.xmin**3 * self.unlabeled_samples**(-4) * \
+            fg_likelihood = getattr(self,  'Foreground' + '_evaluted')* \
                  counts[0] 
 
             # Gaussian noise likelihood
-            gauss_likelihood = (np.sqrt(np.pi/2) * erfc(
-                self.xmin / np.sqrt(2)))**(-1) * np.exp(
-                -self.unlabeled_samples**2 / 2) * counts[1]
+            gauss_likelihood = getattr(self,  'Gaussian' + '_evaluted') * counts[1]
 
             # Likelihood for all other glitch sources of interest
             glitch_likelihood = 0
-            for i, glitch_type in enumerate(glitch_classes):
-                kde_likelihoods = glitch_kdes[glitch_type]
-                likelihoods = np.zeros(self.unlabeled_samples.shape)
-                samp_snr_grid = np.around(self.unlabeled_samples, decimals=2)
-                idxinsidekde = np.argwhere((samp_snr_grid > 7.5) & (samp_snr_grid<100.0))
-                for idx in idxinsidekde:
-                    likelihoods[idx] = kde_likelihoods[samp_snr_grid[idx] == snrgrid][0]
-
+            for idx, iglitchtype in enumerate(glitch_classes):
                 # Evaluate likelihood
-                glitch_likelihood += counts[i+2] * likelihoods
+                glitch_likelihood += counts[idx+2] * getattr(self, iglitchtype + '_evaluted')
 
             return np.sum(np.log(fg_likelihood + gauss_likelihood + \
                 glitch_likelihood))
@@ -289,7 +279,7 @@ class ManyBackgroundCollection(object):
             return -np.inf
 
 
-    def lnprob(self, counts, glitch_classes=[], glitch_kdes={}, snrgrid=None):
+    def lnprob(self, counts, glitch_classes=[]):
         """
         Combine log likelihood and log prior
 
@@ -301,7 +291,7 @@ class ManyBackgroundCollection(object):
          """
 
         prior = self.lnprior(counts)
-        posterior = self.lnlike(counts, glitch_classes, glitch_kdes, snrgrid)
+        posterior = self.lnlike(counts, glitch_classes)
         if not np.isfinite(prior):
             return -np.inf
         return prior + posterior
