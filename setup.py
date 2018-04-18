@@ -97,12 +97,16 @@ extras_require = {
 # -- run setup ----------------------------------------------------------------
 
 packagenames = find_packages()
+data_extensions = ('.h5', '.pklz')
+scripts = [fn for fn in glob.glob(os.path.join('bin', '*')) if
+           not fn.endswith(data_extensions)]
 
 setup(name=DISTNAME,
       provides=[PACKAGENAME],
       version=__version__,
       description=None,
       long_description=None,
+      scripts=scripts,
       author=AUTHOR,
       author_email=AUTHOR_EMAIL,
       license=LICENSE,
