@@ -1,0 +1,134 @@
+#!/usr/bin/env python
+
+from matplotlib import use
+use('agg')
+import corner
+import emcee
+import gwrates.rates_tools as rt
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.special import erfc, erfinv
+from gwpy.table import EventTable
+from astropy.table import vstack
+
+gravityspy_classes =  ['1080Lines', '1400Ripples', 'Air_Compressor', 'Blip', 
+                       'Chirp', 'Extremely_Loud', 'Helix', 'Koi_Fish', 
+                       'Light_Modulation', 'Low_Frequency_Burst', 'Low_Frequency_Lines', 
+                       'No_Glitch', 'None_of_the_Above', 'Paired_Doves', 'Power_Line', 
+                       'Repeating_Blips', 'Scattered_Light', 'Scratchy', 'Tomte', 
+                       'Violin_Mode', 'Wandering_Line', 'Whistle']
+
+background = []
+# Read in gravityspy machine learning labels
+for iclass in gravityspy_classes:
+    background.append(EventTable.read('etc/gspytrigger.hdf5', path='human/{0}'.format(iclass), format='hdf5'))
+    
+background = vstack(background)
+background = EventTable(background)
+
+# Turn the EventTable into a pandas table for easy dict manipulation
+background = background.to_pandas()
+
+# Convert labels to strings
+background['Label'] = background['Label'].str.decode('utf-8')
+
+#bg_events = background.loc[background.Label.isin(['Scratchy', 'Tomte'])]
+bg_events = background
+
+counts_of_each_class = bg_events.Label.value_counts().to_dict()
+snr_series_of_each_class = bg_events.groupby('Label').apply(lambda x: x['snr'].tolist()).to_dict()
+total_background_count = sum(counts_of_each_class.values())
+
+total_background_count, counts_of_each_class, snr_series_of_each_class
+
+foreground_count = 9300
+gaussian_background_count = 20558
+
+
+print(foreground_count + gaussian_background_count + counts_of_each_class['Scratchy'] + counts_of_each_class['Blip'])
+
+collection = rt.ManyBackgroundCollection(snr_series_of_each_class)
+collection.draw_samples(foreground_count, gaussian_background_count, glitch_classes=['Scratchy', 'Blip'])
+import pdb
+pdb.set_trace()
+
+# Compute KDE for each glitch type
+from sklearn.neighbors import KernelDensity
+    
+def compute_kde(glitch_type):
+    
+    """
+    Compute a KDE for a given set of SNRs for a glitch.
+    
+    Parameters:
+    -----------
+    glitch_type: string
+        identified for GravitySpy glitch class
+        
+    Returns:
+    --------
+    kde_skl: scikit-learn KernelDensity object
+        fit KDE for a given glitch class
+    """
+    
+    
+    # Make KDE of one gravity spy distribution
+    kde_skl = KernelDensity(bandwidth=1)
+    kde_skl.fit(np.asarray(snr_series_of_each_class[glitch_type]).reshape(-1, 1))
+    
+    return kde_skl
+
+def plot_kde(glitch_type):
+    
+    """
+    Plot a KDE of a GravitySpy glitch SNR distribution
+    over the analogous histogram.
+    
+    Parameters:
+    -----------
+    glitch_type: string
+        identified for GravitySpy glitch class
+    """
+
+    
+    xrange = np.linspace(7.5, 100, 100)
+    kde = glitch_kdes[glitch_type]
+    pdf = np.exp(kde.score_samples(xrange.reshape(-1, 1)))
+
+    plt.figure()
+    plt.hist(snr_series_of_each_class[glitch_type], bins=xrange, normed=True)
+    plt.plot(xrange, pdf, color='r')
+    plt.xlim(0,100)
+    plt.show()
+    
+glitch_kdes = {}
+for glitch_type in gravityspy_classes:
+    glitch_kdes[glitch_type] = compute_kde(glitch_type)
+
+# Set array of true counts for each category
+counts_true = []
+#for key in collection.samples.keys():
+for key in ['Foreground', 'Gaussian', 'Scratchy', 'Blip']:
+    counts_true.append(len(collection.samples[key]))
+    if key =='Foreground':
+        setattr(collection, key + '_evaluted', 3 * collection.xmin**3 * collection.unlabeled_samples**(-4))
+    elif key == 'Gaussian':
+        setattr(collection, key + '_evaluted', (np.sqrt(np.pi/2) * erfc(
+                collection.xmin / np.sqrt(2)))**(-1) * np.exp(
+                -collection.unlabeled_samples**2 / 2))
+    else:
+        setattr(collection, key + '_evaluted', np.exp(glitch_kdes[key].score_samples(collection.unlabeled_samples.reshape(-1,1))))
+counts_true = np.asarray(counts_true)
+print(counts_true)
+
+ndim = len(collection.samples)
+nwalkers=100
+
+pos_init = [collection.num_samples * np.random.rand(ndim) for i in np.arange(nwalkers)]
+
+sampler = emcee.EnsembleSampler(nwalkers, ndim, collection.lnprob, 
+                                args=([['Scratchy', 'Blip']]))    
+sampler.run_mcmc(pos_init, 100)  
+post_samples = sampler.chain[:, :, :].reshape((-1, ndim)) 
+
+print(post_samples)
