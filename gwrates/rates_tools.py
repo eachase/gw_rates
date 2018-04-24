@@ -159,7 +159,7 @@ class ManyBackgroundCollection(object):
         glitch_classes : `list`, optional, default: `self.glitch_dict.keys()`
             if you would like
             to only populate samples from some of the gravityspy
-            categories provide a list like `['Scratchy', 'Blip']` 
+            categories provide a list like `['Scratchy', 'Blip']`
 
         Returns
         -------
@@ -172,7 +172,7 @@ class ManyBackgroundCollection(object):
         Notes
         -----
         """
-        
+
         glitch_classes = kwargs.pop('glitch_classes', self.glitch_dict.keys())
         self.samples = {}
 
@@ -181,7 +181,7 @@ class ManyBackgroundCollection(object):
         self.samples['Foreground'] = self.xmin * (1 -
                                          np.random.uniform(size=foreground_count))**(-1/3)
 
-        
+
 
         # Draw gaussian background samples
         self.gaussian_background_count = gaussian_background_count
@@ -191,13 +191,13 @@ class ManyBackgroundCollection(object):
                                        erfc(self.xmin / np.sqrt(2)))
 
         # Define each glitch class to have SNRs defined in the glitch_dict
-        for glitch_class in glitch_classes: 
+        for glitch_class in glitch_classes:
             self.samples[glitch_class] = self.glitch_dict[glitch_class]
 
         # Create array of all samples, regardless of label
         self.unlabeled_samples = np.array([])
         for key in self.samples.keys():
-            self.unlabeled_samples = np.append(self.unlabeled_samples, 
+            self.unlabeled_samples = np.append(self.unlabeled_samples,
                 np.array(self.samples[key]))
 
         self.num_samples = len(self.unlabeled_samples)
@@ -210,9 +210,9 @@ class ManyBackgroundCollection(object):
         num_classes = len(self.samples.keys())
         num_bins = int(np.floor(np.sqrt(self.num_samples)))
         colors = plt.cm.viridis(np.linspace(0, 1, num_classes))
-        
+
         # FIXME: need a robust and uniform way to define bins
-        bins = np.linspace(self.xmin, 100, num_bins)        
+        bins = np.linspace(self.xmin, 100, num_bins)
 
         plt.figure(figsize=(20,10))
 
@@ -229,7 +229,7 @@ class ManyBackgroundCollection(object):
         plt.ylabel('Number of Events  with SNR > Corresponding SNR')
         plt.title('%i Samples with Minimum SNR of %.2f' % (int(self.num_samples), self.xmin))
         plt.show()
-    
+
 
     def lnlike(self, counts, glitch_classes=[]):
         """
@@ -244,7 +244,7 @@ class ManyBackgroundCollection(object):
         if np.all(counts >= 0):
             # Foreground likelihood
             fg_likelihood = getattr(self,  'Foreground' + '_evaluted')* \
-                 counts[0] 
+                 counts[0]
 
             # Gaussian noise likelihood
             gauss_likelihood = getattr(self,  'Gaussian' + '_evaluted') * counts[1]
@@ -270,7 +270,7 @@ class ManyBackgroundCollection(object):
         counts: array
             each entry is a count for each source type in the following order:
             [foreground_counts, gaussian_counts, all_other_glitch_counts]
-            
+
         N.B.: technically, the exp^(-Sum(counts)) term is part of the likelihood in FGMC
         """
         if np.all(counts >= 0):
@@ -367,3 +367,79 @@ def lnprob(theta, samples, xmin):
         return -np.inf
 
     return prior + posterior
+
+
+def compute_pastro(collection, lambda_post_samples, glitch_classes, glitch_kdes,
+                   xmin=3.5, num_draw_from_lamda=1000, category='Foreground',
+                   random_state=1986):
+    """
+    Calculate the probability that a given SNR sample
+    comes from an astrophysical distribution.
+
+    Parameters:
+    -----------
+    snr: float
+        value of signal to noise ratio of interest
+
+    post_samples: array of floats
+        array of posterior samples of dimension
+        (num_samples, num_source_classes) where
+        num_samples is the number of posterior
+        samples and num_source_classes is the number
+        of classes considered (i.e. foreground, gaussian, etc.)
+
+    source_classes: array of strings
+        Each entry corresponds to the name of a type of
+        source class: Foreground, Background, Blip, Scratchy, etc.
+
+    glitch_kdes: dictionary
+        Evaluated KDE for each GravitySpy glitch class.
+        Keys are strings of GravitySpy class names.
+
+    xmin: float
+        Minimum threshold SNR
+
+    num_iters: int
+        number of samples drawn for Monte Carlo integration
+
+    Returns:
+    --------
+    float or array
+        P(astro) for each SNR value provided.
+        This only returns one P(astro) if only one SNR is provided.
+
+    """
+    # Draw a sample from the posterior (some set of counts)
+    counts = lambda_post_samples.sample(n=num_draw_from_lamda,
+        random_state=random_state)
+
+    # Compute the "likelihood ratio" for the drawn posterior sample
+    setattr(collection, '{0}_likelihood'.format('Foreground'),
+            np.multiply.outer(counts['Foreground'],
+                              3 * xmin**3 * collection.unlabeled_samples**(-4)
+                              ))
+
+    setattr(collection, '{0}_likelihood'.format('Gaussian'),
+            np.multiply.outer(counts['Gaussian'],
+            (np.sqrt(np.pi/2) * erfc(
+                xmin / np.sqrt(2)))**(-1) * np.exp(-collection.unlabeled_samples**2 / 2)
+                                        ))
+
+    # All GSpy glitches have an SNR greater than 7.5
+    for idx, iglitchtype in enumerate(glitch_classes):
+        setattr(collection, '{0}_likelihood'.format(iglitchtype),
+            np.multiply.outer(counts[iglitchtype],
+            np.exp(
+            glitch_kdes[iglitchtype].score_samples(collection.unlabeled_samples.reshape(-1,1)))
+            ))
+
+    # Add to other samples
+    denominator = 0
+    for ikey in collection.samples.keys():
+        denominator += getattr(collection, '{0}_likelihood'.format(ikey))
+
+    likelihood_ratio = getattr(collection, '{0}_likelihood'.format(category))/\
+        denominator
+
+    # Report sum divided by N
+    return likelihood_ratio.sum(axis=0) / num_draw_from_lamda
