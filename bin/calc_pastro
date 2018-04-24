@@ -2,27 +2,83 @@
 
 from matplotlib import use
 use('agg')
+import argparse
 import corner
 import emcee
-import gwrates.rates_tools as rt
+
 import matplotlib.pyplot as plt
+
 import numpy as np
 from scipy.special import erfc, erfinv
+
+
 from gwpy.table import EventTable
 from astropy.table import vstack
 
-gravityspy_classes =  ['1080Lines', '1400Ripples', 'Air_Compressor', 'Blip', 
-                       'Chirp', 'Extremely_Loud', 'Helix', 'Koi_Fish', 
-                       'Light_Modulation', 'Low_Frequency_Burst', 'Low_Frequency_Lines', 
-                       'No_Glitch', 'None_of_the_Above', 'Paired_Doves', 'Power_Line', 
-                       'Repeating_Blips', 'Scattered_Light', 'Scratchy', 'Tomte', 
-                       'Violin_Mode', 'Wandering_Line', 'Whistle']
+import gwrates.rates_tools as rt
+from gwrates.utils.kde import compute_kde
+from gwrates.utils import log
+from gwrates import __version__
+
+import pandas as pd
+import seaborn
+
+def parse_commandline():
+    """Parse the arguments given on the command-line.
+    """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('-V', '--version', action='version',
+                        version=__version__)
+    parser.add_argument("--path-gravityspy-triggers",
+                        help="h5 file containing Gravity Spy"
+                        "(Omicron) SNR information",
+                        required=True)
+    parser.add_argument("--foreground-count",
+                        help="How many foreground snr's to draw.",
+                        required=True, type=int)
+    parser.add_argument("--gaussian-background-count",
+                        help="How many background snr's to draw.",
+                        required=True, type=int)
+    parser.add_argument("--glitch-classes",
+                        help="what classes would you like"
+                        "to add to the FGMC calculation",
+                        nargs='+', default=[])
+    parser.add_argument("--classification-type",
+                        help="human or ml labels",
+                        default='human')
+    args = parser.parse_args()
+
+    return args
+
+args = parse_commandline()
+
+logger = log.Logger('Multi-Component FGMC w/ Gravity Spy')
+logger.info('You have selected the following...')
+logger.info('Gravity Spy classes to include in '
+            'calculations: {0}'.format(args.glitch_classes))
+logger.info('You have supplied the following trigger file for '
+            'reading in Gravity Spy trigger info: '
+            '{0}'.format(args.path_gravityspy_triggers))
+logger.debug('Currently the SNR is the Omicron SNR not a match filter SNR')
+logger.info('You have requested to have labels supplied by '
+             '{0}'.format(args.classification_type))
+
+gravityspy_classes = ['1080Lines', '1400Ripples', 'Air_Compressor', 'Blip',
+                      'Chirp', 'Extremely_Loud', 'Helix', 'Koi_Fish',
+                      'Light_Modulation', 'Low_Frequency_Burst',
+                      'Low_Frequency_Lines', 'No_Glitch', 'None_of_the_Above',
+                      'Paired_Doves', 'Power_Line', 'Repeating_Blips',
+                      'Scattered_Light', 'Scratchy', 'Tomte',
+                      'Violin_Mode', 'Wandering_Line', 'Whistle']
 
 background = []
 # Read in gravityspy machine learning labels
 for iclass in gravityspy_classes:
-    background.append(EventTable.read('etc/gspytrigger.hdf5', path='human/{0}'.format(iclass), format='hdf5'))
-    
+    background.append(
+        EventTable.read('{0}'.format(args.path_gravityspy_triggers),
+                        path='{0}/{1}'.format(args.classification_type, iclass),
+                        format='hdf5'))
+
 background = vstack(background)
 background = EventTable(background)
 
@@ -32,103 +88,103 @@ background = background.to_pandas()
 # Convert labels to strings
 background['Label'] = background['Label'].str.decode('utf-8')
 
-#bg_events = background.loc[background.Label.isin(['Scratchy', 'Tomte'])]
-bg_events = background
+counts_of_each_class = background.Label.value_counts().to_dict()
 
-counts_of_each_class = bg_events.Label.value_counts().to_dict()
-snr_series_of_each_class = bg_events.groupby('Label').apply(lambda x: x['snr'].tolist()).to_dict()
-total_background_count = sum(counts_of_each_class.values())
+snr_series_of_each_class = background.groupby('Label').apply(
+    lambda x: x['snr'].tolist()
+    ).to_dict()
 
-total_background_count, counts_of_each_class, snr_series_of_each_class
-
-foreground_count = 9300
-gaussian_background_count = 20558
-
-
-print(foreground_count + gaussian_background_count + counts_of_each_class['Scratchy'] + counts_of_each_class['Blip'])
+foreground_count = args.foreground_count
+gaussian_background_count = args.gaussian_background_count
 
 collection = rt.ManyBackgroundCollection(snr_series_of_each_class)
-collection.draw_samples(foreground_count, gaussian_background_count, glitch_classes=['Scratchy', 'Blip'])
-import pdb
-pdb.set_trace()
+collection.draw_samples(foreground_count, gaussian_background_count,
+    glitch_classes=args.glitch_classes)
+
+logger.info('You are now drawing the following number of SNR samples'
+            'for the following classes:')
+
+for icategory in collection.samples.keys():
+    logger.info('    {0} : {1} SNR samples'.format(
+        icategory, len(collection.samples[icategory])))
+
+logger.info('In order to determine the '
+            'probability of a given glitch snr, '
+            'we calculate the KDE for each gltich class asked for')
 
 # Compute KDE for each glitch type
-from sklearn.neighbors import KernelDensity
-    
-def compute_kde(glitch_type):
-    
-    """
-    Compute a KDE for a given set of SNRs for a glitch.
-    
-    Parameters:
-    -----------
-    glitch_type: string
-        identified for GravitySpy glitch class
-        
-    Returns:
-    --------
-    kde_skl: scikit-learn KernelDensity object
-        fit KDE for a given glitch class
-    """
-    
-    
-    # Make KDE of one gravity spy distribution
-    kde_skl = KernelDensity(bandwidth=1)
-    kde_skl.fit(np.asarray(snr_series_of_each_class[glitch_type]).reshape(-1, 1))
-    
-    return kde_skl
-
-def plot_kde(glitch_type):
-    
-    """
-    Plot a KDE of a GravitySpy glitch SNR distribution
-    over the analogous histogram.
-    
-    Parameters:
-    -----------
-    glitch_type: string
-        identified for GravitySpy glitch class
-    """
-
-    
-    xrange = np.linspace(7.5, 100, 100)
-    kde = glitch_kdes[glitch_type]
-    pdf = np.exp(kde.score_samples(xrange.reshape(-1, 1)))
-
-    plt.figure()
-    plt.hist(snr_series_of_each_class[glitch_type], bins=xrange, normed=True)
-    plt.plot(xrange, pdf, color='r')
-    plt.xlim(0,100)
-    plt.show()
-    
 glitch_kdes = {}
-for glitch_type in gravityspy_classes:
-    glitch_kdes[glitch_type] = compute_kde(glitch_type)
+for glitch_type in args.glitch_classes:
+    logger.info('Calculating {0} KDE'.format(glitch_type))
+    glitch_kdes[glitch_type] = compute_kde(glitch_type,
+                                           snr_series_of_each_class)
+
+
+logger.info('In order to obtain posteriors on the Lambdas '
+            'we must first evaluate all of the drawn samples '
+            'at their likelihoods')
 
 # Set array of true counts for each category
-counts_true = []
-#for key in collection.samples.keys():
-for key in ['Foreground', 'Gaussian', 'Scratchy', 'Blip']:
-    counts_true.append(len(collection.samples[key]))
+for key in collection.samples.keys():
+    logger.info('Evaluating collection.unlabeled_samples with:')
     if key =='Foreground':
+        logger.info('    {0} : 3*xmin**3 * SNRSAMPLES**-4'.format(key))
         setattr(collection, key + '_evaluted', 3 * collection.xmin**3 * collection.unlabeled_samples**(-4))
     elif key == 'Gaussian':
+        logger.info('    {0} : '
+                    'sqrt(pi/2) * erfc(xmin/sqrt(3))**-1 * exp(-SNRSAMPLES**2/2)'.format(key))
         setattr(collection, key + '_evaluted', (np.sqrt(np.pi/2) * erfc(
                 collection.xmin / np.sqrt(2)))**(-1) * np.exp(
                 -collection.unlabeled_samples**2 / 2))
     else:
+        logger.info('    {0} : '
+                    '{1}'.format(key, glitch_kdes[key]))
         setattr(collection, key + '_evaluted', np.exp(glitch_kdes[key].score_samples(collection.unlabeled_samples.reshape(-1,1))))
-counts_true = np.asarray(counts_true)
-print(counts_true)
 
+    logger.info('setattr {0} to Class collection'.format(key + '_evaluted'))
+
+logger.info('We now set up the MCMC for lambdas ')
 ndim = len(collection.samples)
 nwalkers=100
+num_samples = 100
+
+logger.info('We are using {0} walkers'.format(nwalkers))
+logger.info('We are asking for {0} samples per walker'.format(num_samples))
 
 pos_init = [collection.num_samples * np.random.rand(ndim) for i in np.arange(nwalkers)]
 
-sampler = emcee.EnsembleSampler(nwalkers, ndim, collection.lnprob, 
-                                args=([['Scratchy', 'Blip']]))    
-sampler.run_mcmc(pos_init, 100)  
-post_samples = sampler.chain[:, :, :].reshape((-1, ndim)) 
+sampler = emcee.EnsembleSampler(nwalkers, ndim, collection.lnprob,
+                                args=([args.glitch_classes]))
 
-print(post_samples)
+sampler.run_mcmc(pos_init, num_samples)
+post_samples = sampler.chain[:, :, :].reshape((-1, ndim))
+
+logger.info('Converting posterior sampeles on lamda to '
+            'Pandas DF'.format(nwalkers))
+
+columns = ['Foreground', 'Gaussian']
+
+for iglitch in args.glitch_classes:
+    columns.append(iglitch)
+
+count_samples = pd.DataFrame(post_samples,
+                             columns=columns)
+
+num_draw_from_lamda = 100
+logger.info('Evaluating pastro of foreground samples using a random'
+            'draw of {0} from the lambda posteriors calculated above'
+            'Pandas DF'.format(num_draw_from_lamda))
+
+allcategories = pd.DataFrame()
+for ikey in collection.samples.keys():
+    pastro = rt.compute_pastro(collection,
+        count_samples, args.glitch_classes, glitch_kdes, xmin=3.5,
+        num_draw_from_lamda=num_draw_from_lamda, category=ikey)
+    allcategories = pd.concat([allcategories,pd.DataFrame(pastro,
+        index=collection.unlabeled_samples.round(3), columns=[ikey])], axis=1)
+
+logger.info('{0}'.format(allcategories.sum(axis=1)))
+plot = seaborn.heatmap(allcategories.sort_index(ascending=False),
+                       vmin=0, vmax=1, cmap='viridis')
+fig = plot.get_figure()
+fig.savefig('Heatmap_of_category_by_randomly_sampled_snrs_colored_by_prob_of_cateogry.png')
