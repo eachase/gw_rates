@@ -4,10 +4,30 @@ use('agg')
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.neighbors import KernelDensity
+from scipy import stats
 from scipy.special import erf, erfc, erfinv
 
 __all__ = ['SampleCollection', 'ManyBackgroundCollection',
            'lnprob', 'lnprior', 'lnlike']
+
+def power_law_pdf(x, k, xmin, xmax=np.inf):
+    if k == -1:
+        raise ValueError("k == -1 is handled by a logarithmic distribution.")
+    assert xmin < x < xmax
+
+    norm = (xmax**(k + 1) - xmin**(k + 1)) / (k+1)
+
+    return x**k / norm
+
+def power_law_rvs(k, xmin, xmax=np.inf, shape=1):
+    if k == -1:
+        raise ValueError("k == -1 is handled by a logarithmic distribution.")
+
+    norm = (xmax**(k + 1) - xmin**(k + 1))
+
+    x = np.random.uniform(0, 1, shape)
+
+    return (x * norm + xmin**(k + 1))**(1. / (k + 1))
 
 class SampleCollection(object):
     """
@@ -46,18 +66,14 @@ class SampleCollection(object):
             number of samples to draw
         """
 
-        for i in np.arange(number):
-            # Draw a random number from a unifrom distribution
-            rand = np.random.uniform()
+        # Determine number of each category from Poissonian statistics
+        n_fg, n_bg = stats.poisson.rvs(self.rate_f_true), \
+                        stats.poisson.rvs(self.rate_b_true)
 
-            # Classify as background
-            if rand < self.ratio_b:
-                self.background.append(np.sqrt(2) * \
-                    erfinv(1 - (1 - np.random.uniform()) * erfc(self.xmin / np.sqrt(2))))
-
-            # Classify as foreground
-            else:
-                self.foreground.append(self.xmin * (1 - np.random.uniform())**(-1/3))
+        # Background model is a chi^2 with 2 degrees of freedom
+        self.background = stats.chi2.rvs(2, loc=self.xmin, size=n_bg)
+        # Foreground model is a power law with index = -4
+        self.foreground = power_law_rvs(-4, self.xmin, shape=n_fg)
 
 
     def plot_hist(self):
@@ -96,7 +112,7 @@ class SampleCollection(object):
         Make cumulative diagram
         """
 
-        samples = self.foreground + self.background
+        samples = np.concatenate((self.foreground, self.background))
         num_samples = len(samples)
         counts, bins = np.histogram(samples, bins=self.bins)
         cdf = np.cumsum(counts) / num_samples
@@ -178,27 +194,20 @@ class ManyBackgroundCollection(object):
 
         # Draw foreground samples
         self.foreground_count = foreground_count
-        self.samples['Foreground'] = self.xmin * (1 -
-                                         np.random.uniform(size=foreground_count))**(-1/3)
-
-
+        self.samples['Foreground'] = power_law_rvs(-4, self.xmin, \
+                                            size=self.foreground_count)
 
         # Draw gaussian background samples
         self.gaussian_background_count = gaussian_background_count
-        self.samples['Gaussian'] = np.sqrt(2) * erfinv(1 -
-                                       (1 - np.random.uniform(
-                                       size=gaussian_background_count))*
-                                       erfc(self.xmin / np.sqrt(2)))
+        self.samples['Gaussian'] = stats.chi2.rvs(2, loc=self.xmin, \
+                                size=self.gaussian_background_count)
 
         # Define each glitch class to have SNRs defined in the glitch_dict
-        for glitch_class in glitch_classes:
-            self.samples[glitch_class] = self.glitch_dict[glitch_class]
+        # FIXME: Note that this is only a shallow copy
+        self.samples = self.glitch_dict.copy()
 
         # Create array of all samples, regardless of label
-        self.unlabeled_samples = np.array([])
-        for key in self.samples.keys():
-            self.unlabeled_samples = np.append(self.unlabeled_samples,
-                np.array(self.samples[key]))
+        self.unlabeled_samples = numpy.concatenate(self.samples.values())
 
         self.num_samples = len(self.unlabeled_samples)
 
@@ -316,9 +325,8 @@ def lnlike(theta, samples, xmin):
     """
     rate_f, rate_b = theta
     if rate_f > 0 and rate_b > 0:
-        return np.sum(np.log(3 * xmin**3 * rate_f * samples**(-4) \
-            + rate_b * (np.sqrt(np.pi/2) * erfc(
-            xmin / np.sqrt(2)))**(-1) * np.exp(-samples**2 / 2)))
+        return np.sum(rate_f * power_law_pdf(samples, -4, self,xmin) \
+            + rate_b * stats.chi2.pdf(2, loc=self.xmin))
     else:
         return -np.inf
 
