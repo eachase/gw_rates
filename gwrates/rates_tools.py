@@ -10,10 +10,12 @@ from scipy.special import erf, erfc, erfinv
 __all__ = ['SampleCollection', 'ManyBackgroundCollection',
            'lnprob', 'lnprior', 'lnlike']
 
+__all__ += ['power_law_pdf', 'power_law_rvs']
+
 def power_law_pdf(x, k, xmin, xmax=np.inf):
     if k == -1:
         raise ValueError("k == -1 is handled by a logarithmic distribution.")
-    assert xmin < x < xmax
+    assert np.all((xmin < x) & (x < xmax))
 
     norm = (xmax**(k + 1) - xmin**(k + 1)) / (k+1)
 
@@ -49,6 +51,8 @@ class SampleCollection(object):
             Minimum threshold SNR
         """
 
+        self.rate_f_true = rate_f_true
+        self.rate_b_true = rate_b_true
         self.ratio_b = rate_b_true / (rate_f_true + rate_b_true)
         self.foreground = []
         self.background = []
@@ -83,16 +87,18 @@ class SampleCollection(object):
 
         num_samples = len(self.foreground) + len(self.background)
         num_bins = int(np.floor(np.sqrt(num_samples)))
-        self.bins = np.linspace(0, max(np.max(self.background), np.max(self.foreground)),
-                                num_bins)
+        self.bins = np.linspace(0, max(np.max(self.background), \
+                        np.max(self.foreground)), num_bins)
 
         plt.figure()
 
         # Foreground histogram
-        bin_counts, bins, _ = plt.hist(self.foreground, label='Foreground', alpha=0.5, bins=num_bins, cumulative=-1, color='purple')
+        bin_counts, bins, _ = plt.hist(self.foreground, label='Foreground', \
+                    alpha=0.5, bins=num_bins, cumulative=-1, color='purple')
 
         # Background histogram
-        plt.hist(self.background, label='Background', alpha=0.5, bins=bins, cumulative=-1, color='0.75')
+        plt.hist(self.background, label='Background', alpha=0.5, bins=bins, \
+                    cumulative=-1, color='0.75')
 
         plt.legend(loc='upper right')
         plt.yscale('log', nonposy='clip')
@@ -100,11 +106,12 @@ class SampleCollection(object):
         plt.ylim(1, None)
         plt.xlabel('SNR')
         plt.ylabel('Number of Events  with SNR > Corresponding SNR')
-        plt.title('%i Samples with Minimum SNR of %.2f' % (int(num_samples), self.xmin))
+        plt.title('%i Samples with Minimum SNR of %.2f' % \
+                    (int(num_samples), self.xmin))
         plt.show()
 
         print('Number of Foreground: ', len(self.foreground))
-        print('Number of Backgruond:', len(self.background))
+        print('Number of Backgruond: ', len(self.background))
 
 
     def plot_cdf(self):
@@ -123,7 +130,8 @@ class SampleCollection(object):
         plt.ylim(0, None)
         plt.xlabel('SNR')
         plt.ylabel('Cumulative Number of Events')
-        plt.title('CDF of %i Samples with Minimum SNR of %.2f' % (num_samples, self.xmin))
+        plt.title('CDF of %i Samples with Minimum SNR of %.2f' % \
+                    (num_samples, self.xmin))
         plt.show()
 
 
@@ -207,7 +215,7 @@ class ManyBackgroundCollection(object):
         self.samples = self.glitch_dict.copy()
 
         # Create array of all samples, regardless of label
-        self.unlabeled_samples = numpy.concatenate(self.samples.values())
+        self.unlabeled_samples = np.concatenate(self.samples.values())
 
         self.num_samples = len(self.unlabeled_samples)
 
@@ -221,9 +229,11 @@ class ManyBackgroundCollection(object):
         colors = plt.cm.viridis(np.linspace(0, 1, num_classes))
 
         # FIXME: need a robust and uniform way to define bins
-        bins = np.linspace(self.xmin, 100, num_bins)
+        # bins = np.linspace(self.xmin, 100, num_bins)
+        # Suggestion:
+        bins = np.linspace(self.xmin, np.max(self.unlabeled_samples), num_bins)
 
-        plt.figure(figsize=(20,10))
+        plt.figure(figsize=(20, 10))
 
         for idx, icategory in enumerate(self.samples.keys()):
             plt.hist(self.samples[icategory], label=icategory,
@@ -236,7 +246,8 @@ class ManyBackgroundCollection(object):
         plt.ylim(1, None)
         plt.xlabel('SNR')
         plt.ylabel('Number of Events  with SNR > Corresponding SNR')
-        plt.title('%i Samples with Minimum SNR of %.2f' % (int(self.num_samples), self.xmin))
+        plt.title('%i Samples with Minimum SNR of %.2f' % \
+                    (int(self.num_samples), self.xmin))
         plt.show()
 
 
@@ -252,11 +263,12 @@ class ManyBackgroundCollection(object):
         """
         if np.all(counts >= 0):
             # Foreground likelihood
-            fg_likelihood = getattr(self,  'Foreground' + '_evaluted')* \
+            fg_likelihood = getattr(self, 'Foreground' + '_evaluted') * \
                  counts[0]
 
             # Gaussian noise likelihood
-            gauss_likelihood = getattr(self,  'Gaussian' + '_evaluted') * counts[1]
+            gauss_likelihood = getattr(self, 'Gaussian' + '_evaluted') * \
+                 counts[1]
 
             # Likelihood for all other glitch sources of interest
             glitch_likelihood = 0
@@ -283,7 +295,7 @@ class ManyBackgroundCollection(object):
         N.B.: technically, the exp^(-Sum(counts)) term is part of the likelihood in FGMC
         """
         if np.all(counts >= 0):
-            return -np.sum(counts) - 0.5*np.log(np.prod(counts))
+            return -np.sum(counts) - 0.5 * np.log(np.prod(counts))
         else:
             return -np.inf
 
@@ -347,7 +359,7 @@ def lnprior(theta):
 
     rate_f, rate_b = theta
     if rate_f > 0 and rate_b > 0:
-        return -rate_f - rate_b - 0.5*np.log(rate_f * rate_b)
+        return -rate_f - rate_b - 0.5 * np.log(rate_f * rate_b)
     else:
         return -np.inf
 
