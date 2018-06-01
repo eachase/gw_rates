@@ -31,6 +31,11 @@ def power_law_rvs(k, xmin, xmax=np.inf, shape=1):
 
     return (x * norm + xmin**(k + 1))**(1. / (k + 1))
 
+def chi2_xmin_pdf(x, k, xmin):
+    assert np.all((xmin < x))
+
+    return stats.chi2.pdf(x, k) / (1 - stats.chi2.cdf(xmin, k))
+
 class SampleCollection(object):
     """
     A set of events with an associated ranking statistic
@@ -121,7 +126,8 @@ class SampleCollection(object):
 
         samples = np.concatenate((self.foreground, self.background))
         num_samples = len(samples)
-        counts, bins = np.histogram(samples, bins=self.bins)
+        # FIXME: Do ECDF here
+        counts, bins = np.histogram(samples, bins=num_samples)
         cdf = np.cumsum(counts) / num_samples
 
         plt.figure()
@@ -329,16 +335,15 @@ def lnlike(theta, samples, xmin):
         first entry corresponds to the rate of foreground events;
         second entry is the rate of background events;
 
-    samples: array
-        all SNR values in the given distribution
+    samples: list of array
+        all SNR values in the given distribution evaluated for each model PDF
 
     xmin: float
         minimum threshold SNR
     """
     rate_f, rate_b = theta
     if rate_f > 0 and rate_b > 0:
-        return np.sum(rate_f * power_law_pdf(samples, -4, self,xmin) \
-            + rate_b * stats.chi2.pdf(2, loc=self.xmin))
+        return np.sum(np.log(rate_f * samples[0] + rate_b * samples[1]))
     else:
         return -np.inf
 
@@ -374,8 +379,8 @@ def lnprob(theta, samples, xmin):
         first entry corresponds to the rate of foreground events;
         second entry is the rate of background events;
 
-    samples: array
-        all SNR values in the given distribution
+    samples: list of arrays
+        all SNR values in the given distribution, evaluated for each model PDF
 
     xmin: float
         minimum threshold SNR
