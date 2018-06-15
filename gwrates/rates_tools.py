@@ -4,10 +4,37 @@ use('agg')
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.neighbors import KernelDensity
+from scipy import stats
 from scipy.special import erf, erfc, erfinv
 
 __all__ = ['SampleCollection', 'ManyBackgroundCollection',
            'lnprob', 'lnprior', 'lnlike']
+
+__all__ += ['power_law_pdf', 'power_law_rvs']
+
+def power_law_pdf(x, k, xmin, xmax=np.inf):
+    if k == -1:
+        raise ValueError("k == -1 is handled by a logarithmic distribution.")
+    assert np.all((xmin < x) & (x < xmax))
+
+    norm = (xmax**(k + 1) - xmin**(k + 1)) / (k+1)
+
+    return x**k / norm
+
+def power_law_rvs(k, xmin, xmax=np.inf, shape=1):
+    if k == -1:
+        raise ValueError("k == -1 is handled by a logarithmic distribution.")
+
+    norm = (xmax**(k + 1) - xmin**(k + 1))
+
+    x = np.random.uniform(0, 1, shape)
+
+    return (x * norm + xmin**(k + 1))**(1. / (k + 1))
+
+def chi2_xmin_pdf(x, k, xmin):
+    assert np.all((xmin < x))
+
+    return stats.chi2.pdf(x, k) / (1 - stats.chi2.cdf(xmin, k))
 
 class SampleCollection(object):
     """
@@ -29,6 +56,8 @@ class SampleCollection(object):
             Minimum threshold SNR
         """
 
+        self.rate_f_true = rate_f_true
+        self.rate_b_true = rate_b_true
         self.ratio_b = rate_b_true / (rate_f_true + rate_b_true)
         self.foreground = []
         self.background = []
@@ -46,18 +75,14 @@ class SampleCollection(object):
             number of samples to draw
         """
 
-        for i in np.arange(number):
-            # Draw a random number from a unifrom distribution
-            rand = np.random.uniform()
+        # Determine number of each category from Poissonian statistics
+        n_fg, n_bg = stats.poisson.rvs(self.rate_f_true), \
+                        stats.poisson.rvs(self.rate_b_true)
 
-            # Classify as background
-            if rand < self.ratio_b:
-                self.background.append(np.sqrt(2) * \
-                    erfinv(1 - (1 - np.random.uniform()) * erfc(self.xmin / np.sqrt(2))))
-
-            # Classify as foreground
-            else:
-                self.foreground.append(self.xmin * (1 - np.random.uniform())**(-1/3))
+        # Background model is a chi^2 with 2 degrees of freedom
+        self.background = stats.chi2.rvs(2, loc=self.xmin, size=n_bg)
+        # Foreground model is a power law with index = -4
+        self.foreground = power_law_rvs(-4, self.xmin, shape=n_fg)
 
 
     def plot_hist(self):
@@ -67,16 +92,18 @@ class SampleCollection(object):
 
         num_samples = len(self.foreground) + len(self.background)
         num_bins = int(np.floor(np.sqrt(num_samples)))
-        self.bins = np.linspace(0, max(np.max(self.background), np.max(self.foreground)),
-                                num_bins)
+        self.bins = np.linspace(0, max(np.max(self.background), \
+                        np.max(self.foreground)), num_bins)
 
         plt.figure()
 
         # Foreground histogram
-        bin_counts, bins, _ = plt.hist(self.foreground, label='Foreground', alpha=0.5, bins=num_bins, cumulative=-1, color='purple')
+        bin_counts, bins, _ = plt.hist(self.foreground, label='Foreground', \
+                    alpha=0.5, bins=num_bins, cumulative=-1, color='purple')
 
         # Background histogram
-        plt.hist(self.background, label='Background', alpha=0.5, bins=bins, cumulative=-1, color='0.75')
+        plt.hist(self.background, label='Background', alpha=0.5, bins=bins, \
+                    cumulative=-1, color='0.75')
 
         plt.legend(loc='upper right')
         plt.yscale('log', nonposy='clip')
@@ -84,11 +111,12 @@ class SampleCollection(object):
         plt.ylim(1, None)
         plt.xlabel('SNR')
         plt.ylabel('Number of Events  with SNR > Corresponding SNR')
-        plt.title('%i Samples with Minimum SNR of %.2f' % (int(num_samples), self.xmin))
+        plt.title('%i Samples with Minimum SNR of %.2f' % \
+                    (int(num_samples), self.xmin))
         plt.show()
 
         print('Number of Foreground: ', len(self.foreground))
-        print('Number of Backgruond:', len(self.background))
+        print('Number of Backgruond: ', len(self.background))
 
 
     def plot_cdf(self):
@@ -96,9 +124,10 @@ class SampleCollection(object):
         Make cumulative diagram
         """
 
-        samples = self.foreground + self.background
+        samples = np.concatenate((self.foreground, self.background))
         num_samples = len(samples)
-        counts, bins = np.histogram(samples, bins=self.bins)
+        # FIXME: Do ECDF here
+        counts, bins = np.histogram(samples, bins=num_samples)
         cdf = np.cumsum(counts) / num_samples
 
         plt.figure()
@@ -107,7 +136,8 @@ class SampleCollection(object):
         plt.ylim(0, None)
         plt.xlabel('SNR')
         plt.ylabel('Cumulative Number of Events')
-        plt.title('CDF of %i Samples with Minimum SNR of %.2f' % (num_samples, self.xmin))
+        plt.title('CDF of %i Samples with Minimum SNR of %.2f' % \
+                    (num_samples, self.xmin))
         plt.show()
 
 
@@ -178,27 +208,20 @@ class ManyBackgroundCollection(object):
 
         # Draw foreground samples
         self.foreground_count = foreground_count
-        self.samples['Foreground'] = self.xmin * (1 -
-                                         np.random.uniform(size=foreground_count))**(-1/3)
-
-
+        self.samples['Foreground'] = power_law_rvs(-4, self.xmin, \
+                                            size=self.foreground_count)
 
         # Draw gaussian background samples
         self.gaussian_background_count = gaussian_background_count
-        self.samples['Gaussian'] = np.sqrt(2) * erfinv(1 -
-                                       (1 - np.random.uniform(
-                                       size=gaussian_background_count))*
-                                       erfc(self.xmin / np.sqrt(2)))
+        self.samples['Gaussian'] = stats.chi2.rvs(2, loc=self.xmin, \
+                                size=self.gaussian_background_count)
 
         # Define each glitch class to have SNRs defined in the glitch_dict
-        for glitch_class in glitch_classes:
-            self.samples[glitch_class] = self.glitch_dict[glitch_class]
+        # FIXME: Note that this is only a shallow copy
+        self.samples = self.glitch_dict.copy()
 
         # Create array of all samples, regardless of label
-        self.unlabeled_samples = np.array([])
-        for key in self.samples.keys():
-            self.unlabeled_samples = np.append(self.unlabeled_samples,
-                np.array(self.samples[key]))
+        self.unlabeled_samples = np.concatenate(self.samples.values())
 
         self.num_samples = len(self.unlabeled_samples)
 
@@ -212,9 +235,11 @@ class ManyBackgroundCollection(object):
         colors = plt.cm.viridis(np.linspace(0, 1, num_classes))
 
         # FIXME: need a robust and uniform way to define bins
-        bins = np.linspace(self.xmin, 100, num_bins)
+        # bins = np.linspace(self.xmin, 100, num_bins)
+        # Suggestion:
+        bins = np.linspace(self.xmin, np.max(self.unlabeled_samples), num_bins)
 
-        plt.figure(figsize=(20,10))
+        plt.figure(figsize=(20, 10))
 
         for idx, icategory in enumerate(self.samples.keys()):
             plt.hist(self.samples[icategory], label=icategory,
@@ -227,7 +252,8 @@ class ManyBackgroundCollection(object):
         plt.ylim(1, None)
         plt.xlabel('SNR')
         plt.ylabel('Number of Events  with SNR > Corresponding SNR')
-        plt.title('%i Samples with Minimum SNR of %.2f' % (int(self.num_samples), self.xmin))
+        plt.title('%i Samples with Minimum SNR of %.2f' % \
+                    (int(self.num_samples), self.xmin))
         plt.show()
 
 
@@ -243,11 +269,12 @@ class ManyBackgroundCollection(object):
         """
         if np.all(counts >= 0):
             # Foreground likelihood
-            fg_likelihood = getattr(self,  'Foreground' + '_evaluted')* \
+            fg_likelihood = getattr(self, 'Foreground' + '_evaluted') * \
                  counts[0]
 
             # Gaussian noise likelihood
-            gauss_likelihood = getattr(self,  'Gaussian' + '_evaluted') * counts[1]
+            gauss_likelihood = getattr(self, 'Gaussian' + '_evaluted') * \
+                 counts[1]
 
             # Likelihood for all other glitch sources of interest
             glitch_likelihood = 0
@@ -274,7 +301,7 @@ class ManyBackgroundCollection(object):
         N.B.: technically, the exp^(-Sum(counts)) term is part of the likelihood in FGMC
         """
         if np.all(counts >= 0):
-            return -np.sum(counts) - 0.5*np.log(np.prod(counts))
+            return -np.sum(counts) - 0.5 * np.log(np.prod(counts))
         else:
             return -np.inf
 
@@ -308,17 +335,15 @@ def lnlike(theta, samples, xmin):
         first entry corresponds to the rate of foreground events;
         second entry is the rate of background events;
 
-    samples: array
-        all SNR values in the given distribution
+    samples: list of array
+        all SNR values in the given distribution evaluated for each model PDF
 
     xmin: float
         minimum threshold SNR
     """
     rate_f, rate_b = theta
     if rate_f > 0 and rate_b > 0:
-        return np.sum(np.log(3 * xmin**3 * rate_f * samples**(-4) \
-            + rate_b * (np.sqrt(np.pi/2) * erfc(
-            xmin / np.sqrt(2)))**(-1) * np.exp(-samples**2 / 2)))
+        return np.sum(np.log(rate_f * samples[0] + rate_b * samples[1]))
     else:
         return -np.inf
 
@@ -339,7 +364,7 @@ def lnprior(theta):
 
     rate_f, rate_b = theta
     if rate_f > 0 and rate_b > 0:
-        return -rate_f - rate_b - 0.5*np.log(rate_f * rate_b)
+        return -rate_f - rate_b - 0.5 * np.log(rate_f * rate_b)
     else:
         return -np.inf
 
@@ -354,8 +379,8 @@ def lnprob(theta, samples, xmin):
         first entry corresponds to the rate of foreground events;
         second entry is the rate of background events;
 
-    samples: array
-        all SNR values in the given distribution
+    samples: list of arrays
+        all SNR values in the given distribution, evaluated for each model PDF
 
     xmin: float
         minimum threshold SNR
